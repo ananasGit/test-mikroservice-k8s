@@ -1,0 +1,170 @@
+kind: Namespace
+apiVersion: v1
+metadata:
+  name: test-app-dev
+  labels:
+    istio-injection: enabled
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-app-dev
+  namespace: test-app-dev
+  labels:
+    app: test-app-dev
+    service: test-app-dev
+    commit_hash: fa317ed
+spec:
+  ports:
+    - port: 8080
+      name: http
+  selector:
+    app: test-app-dev
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-app-dev
+  namespace: test-app-dev
+spec:
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app: test-app-dev
+  template:
+    metadata:
+      labels:
+        app: test-app-dev
+      annotations:
+        sidecar.istio.io/inject: "true"
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: worker
+                    operator: NotIn
+                    values:
+                      - extended
+      containers:
+        - name: test-app-dev
+          image: 744451532675.dkr.ecr.eu-central-1.amazonaws.com/app/test:master-fa317ed
+          imagePullPolicy: "IfNotPresent"
+          resources:
+            limits:
+              cpu: 600m
+              memory: 800Mi
+            requests:
+              cpu: 100m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 60
+            timeoutSeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 120
+            failureThreshold: 10
+            timeoutSeconds: 5
+            periodSeconds: 3
+          env:
+            - name: SPRING_PROFILE
+              value: "dev"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: dev1-rds-postgres-test-password
+                  key: SecureString
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: dev1-rds-postgres-test-username
+                  key: SecureString
+            - name: POSTGRES_HOST
+              value: "ananas-dev1-postgresql.cluster-cgoqyqmceaf7.eu-central-1.rds.amazonaws.com"
+            - name: DB_NAME
+              value: "dev1svctest"
+---
+apiVersion: autoscaling/v1
+kind: HorizontalPodAutoscaler
+metadata:
+  name: test-app-dev
+  namespace: test-app-dev
+spec:
+  minReplicas: 2
+  maxReplicas: 2
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: test-app-dev
+  targetCPUUtilizationPercentage: 50
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: test-app-dev
+  namespace: test-app-dev
+spec:
+  hosts:
+    - "api.svc.dev.ananastest.com"
+  gateways:
+    - istio-system/dev1-api-vpn-gateway
+  http:
+    - name: test-app-dev
+      match:
+        - uri:
+            prefix: "/test/"
+      rewrite:
+        uri: "/"
+      route:
+        - destination:
+            host: test-app-dev
+            port:
+              number: 8080
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: hc-test-app-dev
+  namespace: test-app-dev
+spec:
+  hosts:
+    - "hc.dev.ananastest.com"
+  gateways:
+    - istio-system/dev1-public-gateway
+  http:
+    - name: test-app-dev
+      match:
+        - uri:
+            prefix: "/test/"
+      rewrite:
+        uri: "/actuator/health/liveness"
+      route:
+        - destination:
+            host: test-app-dev
+            port:
+              number: 8080
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dev1-rds-postgres-test-password
+  annotations:
+    aws-ssm/k8s-secret-name: dev1-rds-postgres-test-password
+    aws-ssm/aws-param-name: dev1-rds-postgres-test-password
+    aws-ssm/aws-param-type: SecureString
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dev1-rds-postgres-test-username
+  annotations:
+    aws-ssm/k8s-secret-name: dev1-rds-postgres-test-username
+    aws-ssm/aws-param-name: dev1-rds-postgres-test-username
+    aws-ssm/aws-param-type: SecureString
